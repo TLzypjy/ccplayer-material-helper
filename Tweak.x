@@ -1,6 +1,8 @@
 #import <UIKit/UIKit.h>
 #import <PhotosUI/PhotosUI.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <AVFoundation/AVFoundation.h>
+#import <QuartzCore/QuartzCore.h>
 #import <substrate.h>
 #import <objc/runtime.h>
 
@@ -10,11 +12,19 @@
 - (void)reloadSpecifiers;
 @end
 
-// cc播放器 素材导入助手（仅导入）
-// 注入 Preferences 进程, 在「选择收起/展开背景视频/图片」页加右上角「导入」按钮,
-// 相册走系统原生 PHPicker, 文件走系统原生 UIDocumentPicker (asCopy), 导入到原插件素材目录。
+// cc播放器 素材库增强（网格预览 + 长按删除 + 行内改名 + 系统原生导入）
+// 注入 Preferences 进程：
+//  - 「选择收起/展开背景视频/图片」页由文字列表接管为缩略图网格
+//  - 右上角「导入」按钮：系统原生 PHPicker（相册）/ UIDocumentPicker（文件）
+//  - 长按缩略图进入抖动编辑态，右上角红 − 删除
+//  - 点缩略图下方名字就地输入改名（保留原扩展名）
 static NSString *const kCCMDir = @"/var/mobile/Media/CCMusicModuleBackgrounds";
+static NSString *const kCCMPrefsDomain = @"com.codex.ccmusicmodule.reborn";
+static NSString *const kCCMPrefsChanged = @"com.codex.ccmusicmodule.reborn.prefschanged";
+static NSString *const kCCMGridChanged = @"ccmBackgroundsChanged";
 static const void *kCCMKeyImportBtn = &kCCMKeyImportBtn;
+static const void *kCCMKeyGridView = &kCCMKeyGridView;
+static const void *kCCMKeyDoneBtn = &kCCMKeyDoneBtn;
 
 static BOOL ccm_isSelectionPage(UIViewController *vc) {
     if (!vc) return NO;
@@ -23,6 +33,20 @@ static BOOL ccm_isSelectionPage(UIViewController *vc) {
     if (!t.length) return NO;
     return ([t rangeOfString:@"选择收起背景视频"].location != NSNotFound ||
             [t rangeOfString:@"选择展开背景视频"].location != NSNotFound);
+}
+
+static BOOL ccm_isCompactPage(UIViewController *vc) {
+    if (!vc) return NO;
+    NSString *t = vc.navigationItem.title;
+    if (!t.length) t = vc.title;
+    return ([t rangeOfString:@"选择收起背景视频"].location != NSNotFound);
+}
+
+static BOOL ccm_supportedName(NSString *name) {
+    NSString *ext = name.pathExtension.lowercaseString;
+    static NSSet *s = nil;
+    if (!s) s = [NSSet setWithArray:@[@"mp4", @"mov", @"gif", @"png", @"jpg", @"jpeg"]];
+    return [s containsObject:ext];
 }
 
 static void ccm_ensureDir(void) {
@@ -43,11 +67,412 @@ static NSString *ccm_uniquePath(NSString *dir, NSString *name) {
     return [dir stringByAppendingPathComponent:cand];
 }
 
-static void ccm_reload(id self) {
-    if ([self respondsToSelector:@selector(reloadSpecifiers)]) {
-        ((void(*)(id, SEL))objc_msgSend)(self, @selector(reloadSpecifiers));
+static void ccm_postPrefsChanged(void) {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         (__bridge CFStringRef)kCCMPrefsChanged, NULL, NULL, YES);
+}
+
+static void ccm_postGridChanged(void) {
+    [[NSNotificationCenter defaultCenter] postNotificationName:kCCMGridChanged object:nil];
+}
+
+static NSString *ccm_prefString(NSString *key) {
+    CFStringRef v = (CFStringRef)CFPreferencesCopyValue((__bridge CFStringRef)key,
+                                           (__bridge CFStringRef)kCCMPrefsDomain,
+                                           kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    return v ? CFBridgingRelease(v) : nil;
+}
+
+static void ccm_setPrefString(NSString *key, NSString *val) {
+    CFPreferencesSetValue((__bridge CFStringRef)key, (__bridge CFStringRef)val,
+                          (__bridge CFStringRef)kCCMPrefsDomain,
+                          kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSynchronize((__bridge CFStringRef)kCCMPrefsDomain,
+                             kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+}
+
+#pragma mark - 素材网格 Cell
+
+@interface CCMBgCell : UICollectionViewCell
+@property (nonatomic, strong) UIImageView *thumbView;
+@property (nonatomic, strong) UIButton *nameButton;
+@property (nonatomic, strong) UIButton *deleteButton;
+@property (nonatomic, strong) UIImageView *checkView;
+@property (nonatomic, strong) NSString *currentPath;
+@property (nonatomic, copy) void (^onLongPress)(void);
+@property (nonatomic, copy) void (^onDelete)(void);
+@property (nonatomic, copy) void (^onRenameTap)(void);
+- (void)setJiggling:(BOOL)jiggle;
+@end
+
+@implementation CCMBgCell
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        _thumbView = [[UIImageView alloc] initWithFrame:CGRectZero];
+        _thumbView.contentMode = UIViewContentModeScaleAspectFill;
+        _thumbView.clipsToBounds = YES;
+        _thumbView.layer.cornerRadius = 8;
+        _thumbView.userInteractionEnabled = YES;
+        [self.contentView addSubview:_thumbView];
+
+        _nameButton = [UIButton buttonWithType:UIButtonTypeCustom];
+        _nameButton.titleLabel.font = [UIFont systemFontOfSize:10];
+        _nameButton.titleLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        _nameButton.titleLabel.numberOfLines = 1;
+        [_nameButton setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
+        [_nameButton addTarget:self action:@selector(ccm_nameTapped) forControlEvents:UIControlEventTouchUpInside];
+        [self.contentView addSubview:_nameButton];
+
+        _deleteButton = [UIButton buttonWithType:UIButtonTypeSystem];
+        [_deleteButton setTitle:@"−" forState:UIControlStateNormal];
+        [_deleteButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        _deleteButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+        _deleteButton.backgroundColor = [UIColor systemRedColor];
+        _deleteButton.layer.cornerRadius = 13;
+        _deleteButton.layer.masksToBounds = YES;
+        _deleteButton.hidden = YES;
+        [_deleteButton addTarget:self action:@selector(ccm_deleteTapped) forControlEvents:UIControlEventTouchUpInside];
+        [self.contentView addSubview:_deleteButton];
+
+        _checkView = [[UIImageView alloc] initWithFrame:CGRectZero];
+        _checkView.backgroundColor = [UIColor systemBlueColor];
+        _checkView.layer.cornerRadius = 11;
+        _checkView.layer.masksToBounds = YES;
+        _checkView.layer.borderColor = [UIColor whiteColor].CGColor;
+        _checkView.layer.borderWidth = 1.5;
+        _checkView.hidden = YES;
+        [_checkView setImage:[[UIImage systemImageNamed:@"checkmark"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+        _checkView.tintColor = [UIColor whiteColor];
+        _checkView.contentMode = UIViewContentModeCenter;
+        [self.contentView addSubview:_checkView];
+
+        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ccm_longPressed:)];
+        lp.minimumPressDuration = 0.4;
+        [_thumbView addGestureRecognizer:lp];
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat w = self.contentView.bounds.size.width;
+    CGFloat h = self.contentView.bounds.size.height;
+    CGFloat thumbH = h - 28;
+    self.thumbView.frame = CGRectMake(0, 0, w, thumbH);
+    self.nameButton.frame = CGRectMake(0, thumbH + 2, w, 24);
+    self.deleteButton.frame = CGRectMake(w - 28, 2, 26, 26);
+    self.checkView.frame = CGRectMake(w - 22, thumbH - 30, 22, 22);
+}
+
+- (void)ccm_longPressed:(UILongPressGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan && self.onLongPress) self.onLongPress();
+}
+
+- (void)ccm_deleteTapped {
+    if (self.onDelete) self.onDelete();
+}
+
+- (void)ccm_nameTapped {
+    if (self.onRenameTap) self.onRenameTap();
+}
+
+- (void)setJiggling:(BOOL)jiggle {
+    if (jiggle) {
+        CABasicAnimation *anim = [CABasicAnimation animationWithKeyPath:@"transform.rotation"];
+        anim.toValue = @(0.03);
+        anim.fromValue = @(-0.03);
+        anim.duration = 0.12;
+        anim.autoreverses = YES;
+        anim.repeatCount = 100000;
+        [self.thumbView.layer addAnimation:anim forKey:@"ccmJiggle"];
+    } else {
+        [self.thumbView.layer removeAnimationForKey:@"ccmJiggle"];
     }
 }
+@end
+
+#pragma mark - 素材网格视图
+
+@interface CCMBackgroundsGridView : UIView <UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout, UITextFieldDelegate>
+@property (nonatomic, strong) UICollectionView *cv;
+@property (nonatomic, strong) NSMutableArray<NSString *> *files;
+@property (nonatomic, assign) BOOL editing;
+@property (nonatomic, weak) UIViewController *host;
+@property (nonatomic, strong) UITextField *activeField;
+@property (nonatomic, strong) NSIndexPath *activeIndex;
+@property (nonatomic, strong) UILabel *emptyLabel;
+@property (nonatomic, strong) UILabel *footerLabel;
+@end
+
+@implementation CCMBackgroundsGridView
+
+- (instancetype)initWithFrame:(CGRect)frame host:(UIViewController *)host {
+    self = [super initWithFrame:frame];
+    if (self) {
+        _host = host;
+
+        UICollectionViewFlowLayout *fl = [[UICollectionViewFlowLayout alloc] init];
+        fl.scrollDirection = UICollectionViewScrollDirectionVertical;
+        fl.minimumInteritemSpacing = 10;
+        fl.minimumLineSpacing = 14;
+        fl.sectionInset = UIEdgeInsetsMake(12, 12, 12, 12);
+
+        _cv = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:fl];
+        _cv.backgroundColor = [UIColor systemGroupedBackgroundColor];
+        _cv.dataSource = self;
+        _cv.delegate = self;
+        _cv.alwaysBounceVertical = YES;
+        [_cv registerClass:[CCMBgCell class] forCellWithReuseIdentifier:@"ccmbg"];
+        [_cv registerClass:[UICollectionReusableView class] forSupplementaryViewOfKind:UICollectionElementKindSectionFooter withReuseIdentifier:@"ccmfooter"];
+        [self addSubview:_cv];
+
+        _emptyLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        _emptyLabel.text = @"未找到背景文件";
+        _emptyLabel.textColor = [UIColor secondaryLabelColor];
+        _emptyLabel.font = [UIFont systemFontOfSize:15];
+        _emptyLabel.textAlignment = NSTextAlignmentCenter;
+        [_cv addSubview:_emptyLabel];
+
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(ccm_onChanged) name:kCCMGridChanged object:nil];
+
+        [self ccm_rescan];
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    self.cv.frame = self.bounds;
+    self.emptyLabel.frame = CGRectMake(0, 120, self.bounds.size.width, 30);
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+#pragma mark 数据
+
+- (void)ccm_rescan {
+    ccm_ensureDir();
+    NSArray *all = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:kCCMDir error:nil] ?: @[];
+    NSMutableArray *arr = [NSMutableArray array];
+    for (NSString *n in all) {
+        if (ccm_supportedName(n)) [arr addObject:n];
+    }
+    [arr sortUsingSelector:@selector(localizedStandardCompare:)];
+    self.files = arr;
+    self.emptyLabel.hidden = self.files.count > 0;
+    [self.cv reloadData];
+}
+
+- (void)ccm_onChanged {
+    [self ccm_rescan];
+}
+
+- (NSString *)ccm_filePathForIndex:(NSIndexPath *)ip {
+    return [kCCMDir stringByAppendingPathComponent:self.files[ip.row]];
+}
+
+- (void)ccm_startJiggling {
+    for (CCMBgCell *c in self.cv.visibleCells) [c setJiggling:YES];
+}
+
+- (void)ccm_stopJiggling {
+    for (CCMBgCell *c in self.cv.visibleCells) [c setJiggling:NO];
+}
+
+#pragma mark 编辑态
+
+- (void)enterEditing {
+    if (self.editing) return;
+    self.editing = YES;
+    [self.cv reloadData];
+    [self ccm_startJiggling];
+
+    UIBarButtonItem *done = objc_getAssociatedObject(self.host, kCCMKeyDoneBtn);
+    if (!done) {
+        done = [[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStyleDone target:self action:@selector(exitEditing)];
+        objc_setAssociatedObject(self.host, kCCMKeyDoneBtn, done, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    NSMutableArray *arr = [self.host.navigationItem.rightBarButtonItems mutableCopy] ?: [NSMutableArray array];
+    if (![arr containsObject:done]) [arr addObject:done];
+    self.host.navigationItem.rightBarButtonItems = arr;
+}
+
+- (void)exitEditing {
+    if (!self.editing) return;
+    [self.activeField resignFirstResponder];
+    self.editing = NO;
+    UIBarButtonItem *done = objc_getAssociatedObject(self.host, kCCMKeyDoneBtn);
+    if (done) {
+        NSMutableArray *arr = [self.host.navigationItem.rightBarButtonItems mutableCopy] ?: [NSMutableArray array];
+        [arr removeObject:done];
+        self.host.navigationItem.rightBarButtonItems = arr;
+    }
+    [self.cv reloadData];
+    [self ccm_stopJiggling];
+}
+
+#pragma mark 删除 / 选中 / 改名
+
+- (void)ccm_deleteFile:(NSIndexPath *)ip {
+    NSString *path = [self ccm_filePathForIndex:ip];
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    [self ccm_rescan];
+    ccm_postGridChanged();
+}
+
+- (void)ccm_selectFile:(NSIndexPath *)ip {
+    NSString *file = self.files[ip.row];
+    NSString *key = ccm_isCompactPage(self.host) ? @"selectedCompactBackgroundFile" : @"selectedExpandedBackgroundFile";
+    ccm_setPrefString(key, file);
+    ccm_postPrefsChanged();
+    [self.cv reloadData];
+}
+
+- (void)beginRename:(NSIndexPath *)ip {
+    if (!self.files.count) return;
+    CCMBgCell *cell = (CCMBgCell *)[self.cv cellForItemAtIndexPath:ip];
+    if (!cell) return;
+    UITextField *tf = [[UITextField alloc] initWithFrame:cell.nameButton.frame];
+    tf.borderStyle = UITextBorderStyleRoundedRect;
+    tf.font = [UIFont systemFontOfSize:10];
+    tf.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    tf.autocorrectionType = UITextAutocorrectionTypeNo;
+    tf.returnKeyType = UIReturnKeyDone;
+    tf.clearButtonMode = UITextFieldViewModeWhileEditing;
+    tf.text = [self.files[ip.row] stringByDeletingPathExtension];
+    tf.delegate = self;
+    [cell.contentView addSubview:tf];
+    cell.nameButton.hidden = YES;
+    self.activeField = tf;
+    self.activeIndex = ip;
+    [tf becomeFirstResponder];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
+}
+
+- (void)textFieldDidEndEditing:(UITextField *)textField {
+    if (self.activeField != textField) return;
+    NSIndexPath *ip = self.activeIndex;
+    NSString *old = ip.row < self.files.count ? self.files[ip.row] : nil;
+    NSString *newBase = [textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (old.length && newBase.length && ![newBase isEqualToString:old.stringByDeletingPathExtension]) {
+        NSString *ext = old.pathExtension;
+        NSString *newName = ext.length ? [newBase stringByAppendingPathExtension:ext] : newBase;
+        NSString *oldPath = [kCCMDir stringByAppendingPathComponent:old];
+        NSString *newPath = ccm_uniquePath(kCCMDir, newName);
+        if (![oldPath isEqualToString:newPath]) {
+            [[NSFileManager defaultManager] moveItemAtPath:oldPath toPath:newPath error:nil];
+        }
+        [self ccm_rescan];
+        ccm_postGridChanged();
+    }
+    CCMBgCell *cell = (CCMBgCell *)[self.cv cellForItemAtIndexPath:ip];
+    cell.nameButton.hidden = NO;
+    [textField removeFromSuperview];
+    self.activeField = nil;
+    self.activeIndex = nil;
+}
+
+#pragma mark 缩略图加载
+
+- (void)ccm_loadThumb:(NSString *)path into:(CCMBgCell *)cell at:(NSIndexPath *)ip {
+    cell.currentPath = path;
+    cell.thumbView.image = nil;
+    NSString *ext = path.pathExtension.lowercaseString;
+    BOOL isVideo = [@[@"mp4", @"mov"] containsObject:ext];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        UIImage *img = nil;
+        if (isVideo) {
+            AVURLAsset *asset = [AVURLAsset assetWithURL:[NSURL fileURLWithPath:path]];
+            AVAssetImageGenerator *gen = [AVAssetImageGenerator assetImageGeneratorWithAsset:asset];
+            gen.appliesPreferredTrackTransform = YES;
+            gen.maximumSize = CGSizeMake(320, 320);
+            NSError *err = nil;
+            CGImageRef cg = [gen copyCGImageAtTime:CMTimeMakeWithSeconds(0.1, 600) actualTime:NULL error:&err];
+            if (cg) {
+                img = [UIImage imageWithCGImage:cg];
+                CGImageRelease(cg);
+            }
+        } else {
+            img = [UIImage imageWithContentsOfFile:path];
+        }
+        if (!img) img = [UIImage systemImageNamed:@"film"];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([cell.currentPath isEqualToString:path]) cell.thumbView.image = img;
+        });
+    });
+}
+
+#pragma mark UICollectionView
+
+- (NSInteger)numberOfSectionsInCollectionView:(UICollectionView *)cv { return 1; }
+
+- (NSInteger)collectionView:(UICollectionView *)cv numberOfItemsInSection:(NSInteger)section {
+    return self.files.count;
+}
+
+- (CGSize)collectionView:(UICollectionView *)cv layout:(UICollectionViewLayout *)layout sizeForItemAtIndexPath:(NSIndexPath *)ip {
+    CGFloat w = cv.bounds.size.width;
+    CGFloat side = (w - 12*2 - 10*3) / 4.0;
+    return CGSizeMake(side, side + 26);
+}
+
+- (UICollectionViewCell *)collectionView:(UICollectionView *)cv cellForItemAtIndexPath:(NSIndexPath *)ip {
+    CCMBgCell *cell = [cv dequeueReusableCellWithReuseIdentifier:@"ccmbg" forIndexPath:ip];
+    NSString *file = self.files[ip.row];
+    NSString *path = [kCCMDir stringByAppendingPathComponent:file];
+    [cell.nameButton setTitle:file forState:UIControlStateNormal];
+    cell.deleteButton.hidden = !self.editing;
+    cell.checkView.hidden = YES;
+
+    NSString *selKey = ccm_isCompactPage(self.host) ? @"selectedCompactBackgroundFile" : @"selectedExpandedBackgroundFile";
+    if ([ccm_prefString(selKey) isEqualToString:file]) cell.checkView.hidden = NO;
+
+    __weak typeof(self) ws = self;
+    cell.onLongPress = ^{ [ws enterEditing]; };
+    cell.onDelete = ^{ [ws ccm_deleteFile:ip]; };
+    cell.onRenameTap = ^{ [ws beginRename:ip]; };
+    [cell setJiggling:self.editing];
+    [self ccm_loadThumb:path into:cell at:ip];
+    return cell;
+}
+
+- (void)collectionView:(UICollectionView *)cv didSelectItemAtIndexPath:(NSIndexPath *)ip {
+    if (self.editing) return;
+    [self ccm_selectFile:ip];
+}
+
+- (UICollectionReusableView *)collectionView:(UICollectionView *)cv viewForSupplementaryElementOfKind:(NSString *)kind atIndexPath:(NSIndexPath *)ip {
+    UICollectionReusableView *v = [cv dequeueReusableSupplementaryViewOfKind:UICollectionElementKindSectionFooter withReuseIdentifier:@"ccmfooter" forIndexPath:ip];
+    if (!self.footerLabel || self.footerLabel.superview != v) {
+        [self.footerLabel removeFromSuperview];
+        self.footerLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        self.footerLabel.numberOfLines = 0;
+        self.footerLabel.font = [UIFont systemFontOfSize:12];
+        self.footerLabel.textColor = [UIColor secondaryLabelColor];
+        self.footerLabel.text = @"将多个 mp4/mov/gif/png/jpg/jpeg 放到 /var/mobile/Media/CCMusicModuleBackgrounds。这里选择的素材只会作用到当前这个状态；如果这个状态还没单独选过，就会回退到默认背景选择。\n\n长按素材可删除，点名字可直接改名。";
+        [v addSubview:self.footerLabel];
+    }
+    return v;
+}
+
+- (CGSize)collectionView:(UICollectionView *)cv layout:(UICollectionViewLayout *)layout referenceSizeForFooterInSection:(NSInteger)section {
+    return CGSizeMake(cv.bounds.size.width - 24, 120);
+}
+
+- (void)collectionView:(UICollectionView *)cv willDisplaySupplementaryView:(UICollectionReusableView *)view forElementKind:(NSString *)elementKind atIndexPath:(NSIndexPath *)ip {
+    if ([elementKind isEqualToString:UICollectionElementKindSectionFooter]) {
+        self.footerLabel.frame = CGRectInset(view.bounds, 4, 0);
+    }
+}
+
+@end
 
 #pragma mark - 系统原生选择器协调器（相册=PHPicker, 文件=UIDocumentPicker）
 
@@ -100,8 +525,8 @@ static void ccm_reload(id self) {
 - (void)ccm_notifyHost {
     dispatch_async(dispatch_get_main_queue(), ^{
         id h = self.host;
+        ccm_postGridChanged();
         if (!h) return;
-        ccm_reload(h);
         UIAlertController *al = [UIAlertController alertControllerWithTitle:@"导入完成" message:@"素材已导入到背景素材目录" preferredStyle:UIAlertControllerStyleAlert];
         [al addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
         [h presentViewController:al animated:YES completion:nil];
@@ -169,6 +594,18 @@ static void ccm_importTappedImpl(id self, SEL _cmd) {
 #pragma mark - Hook（注入 Preferences 进程）
 
 %hook PSListController
+
+- (void)viewDidLoad {
+    %orig;
+    if (!ccm_isSelectionPage(self)) return;
+    CCMBackgroundsGridView *gv = objc_getAssociatedObject(self, kCCMKeyGridView);
+    if (!gv) {
+        gv = [[CCMBackgroundsGridView alloc] initWithFrame:self.view.bounds host:self];
+        gv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self.view addSubview:gv];
+        objc_setAssociatedObject(self, kCCMKeyGridView, gv, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
