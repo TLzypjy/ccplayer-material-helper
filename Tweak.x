@@ -184,7 +184,7 @@ static void ccm_finishImport(UIViewController *picker, UIViewController *host, B
 - (void)ccm_load {
     PHFetchOptions *fo = [PHFetchOptions new];
     fo.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"creationDate" ascending:NO]];
-    PHFetchResult *res = [PHAsset fetchAssetsWithMediaType:PHAssetMediaTypeAny options:fo];
+    PHFetchResult *res = [PHAsset fetchAssetsWithOptions:fo];
     NSMutableArray *arr = [NSMutableArray array];
     [res enumerateObjectsUsingBlock:^(PHAsset *a, NSUInteger idx, BOOL *stop){
         [arr addObject:a];
