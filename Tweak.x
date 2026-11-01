@@ -98,6 +98,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 @property (nonatomic, strong) UIButton *nameButton;
 @property (nonatomic, strong) UIButton *deleteButton;
 @property (nonatomic, strong) UIImageView *checkView;
+@property (nonatomic, strong) UIImageView *videoBadge;
 @property (nonatomic, strong) NSString *currentPath;
 @property (nonatomic, copy) void (^onLongPress)(void);
 @property (nonatomic, copy) void (^onDelete)(void);
@@ -127,13 +128,23 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         _deleteButton = [UIButton buttonWithType:UIButtonTypeSystem];
         [_deleteButton setTitle:@"−" forState:UIControlStateNormal];
         [_deleteButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        _deleteButton.titleLabel.font = [UIFont boldSystemFontOfSize:17];
+        _deleteButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
         _deleteButton.backgroundColor = [UIColor systemRedColor];
-        _deleteButton.layer.cornerRadius = 13;
+        _deleteButton.layer.cornerRadius = 10;
         _deleteButton.layer.masksToBounds = YES;
         _deleteButton.hidden = YES;
         [_deleteButton addTarget:self action:@selector(ccm_deleteTapped) forControlEvents:UIControlEventTouchUpInside];
-        [self.contentView addSubview:_deleteButton];
+        [_thumbView addSubview:_deleteButton];
+
+        _videoBadge = [[UIImageView alloc] initWithFrame:CGRectZero];
+        _videoBadge.image = [[UIImage systemImageNamed:@"play.circle.fill"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        _videoBadge.tintColor = [UIColor whiteColor];
+        _videoBadge.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+        _videoBadge.layer.cornerRadius = 10;
+        _videoBadge.layer.masksToBounds = YES;
+        _videoBadge.contentMode = UIViewContentModeCenter;
+        _videoBadge.hidden = YES;
+        [_thumbView addSubview:_videoBadge];
 
         _checkView = [[UIImageView alloc] initWithFrame:CGRectZero];
         _checkView.backgroundColor = [UIColor systemBlueColor];
@@ -158,11 +169,12 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
     [super layoutSubviews];
     CGFloat w = self.contentView.bounds.size.width;
     CGFloat h = self.contentView.bounds.size.height;
-    CGFloat thumbH = h - 28;
+    CGFloat thumbH = h - 26;
     self.thumbView.frame = CGRectMake(0, 0, w, thumbH);
-    self.nameButton.frame = CGRectMake(0, thumbH + 2, w, 24);
-    self.deleteButton.frame = CGRectMake(w - 28, 2, 26, 26);
-    self.checkView.frame = CGRectMake(w - 22, thumbH - 30, 22, 22);
+    self.nameButton.frame = CGRectMake(0, thumbH + 2, w, 22);
+    self.deleteButton.frame = CGRectMake(w - 24, 4, 20, 20);
+    self.videoBadge.frame = CGRectMake(6, thumbH - 26, 20, 20);
+    self.checkView.frame = CGRectMake(w - 24, thumbH - 32, 22, 22);
 }
 
 - (void)ccm_longPressed:(UILongPressGestureRecognizer *)g {
@@ -214,9 +226,9 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
         UICollectionViewFlowLayout *fl = [[UICollectionViewFlowLayout alloc] init];
         fl.scrollDirection = UICollectionViewScrollDirectionVertical;
-        fl.minimumInteritemSpacing = 10;
-        fl.minimumLineSpacing = 14;
-        fl.sectionInset = UIEdgeInsetsMake(12, 12, 12, 12);
+        fl.minimumInteritemSpacing = 12;
+        fl.minimumLineSpacing = 16;
+        fl.sectionInset = UIEdgeInsetsMake(20, 20, 20, 20);
 
         _cv = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:fl];
         _cv.backgroundColor = [UIColor systemGroupedBackgroundColor];
@@ -333,6 +345,8 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 - (void)beginRename:(NSIndexPath *)ip {
     if (!self.files.count) return;
+    // 先结束上一次未完成的编辑
+    if (self.activeField) [self.activeField resignFirstResponder];
     CCMBgCell *cell = (CCMBgCell *)[self.cv cellForItemAtIndexPath:ip];
     if (!cell) return;
     UITextField *tf = [[UITextField alloc] initWithFrame:cell.nameButton.frame];
@@ -361,6 +375,12 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
     NSIndexPath *ip = self.activeIndex;
     NSString *old = ip.row < self.files.count ? self.files[ip.row] : nil;
     NSString *newBase = [textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    // 先恢复当前 cell 的 UI，再改名刷新（避免 reload 复用残留输入框盖住其他名字）
+    CCMBgCell *curCell = (CCMBgCell *)[self.cv cellForItemAtIndexPath:ip];
+    [textField removeFromSuperview];
+    self.activeField = nil;
+    self.activeIndex = nil;
+    if (curCell) curCell.nameButton.hidden = NO;
     if (old.length && newBase.length && ![newBase isEqualToString:old.stringByDeletingPathExtension]) {
         NSString *ext = old.pathExtension;
         NSString *newName = ext.length ? [newBase stringByAppendingPathExtension:ext] : newBase;
@@ -372,11 +392,6 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         [self ccm_rescan];
         ccm_postGridChanged();
     }
-    CCMBgCell *cell = (CCMBgCell *)[self.cv cellForItemAtIndexPath:ip];
-    cell.nameButton.hidden = NO;
-    [textField removeFromSuperview];
-    self.activeField = nil;
-    self.activeIndex = nil;
 }
 
 #pragma mark 缩略图加载
@@ -419,7 +434,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 - (CGSize)collectionView:(UICollectionView *)cv layout:(UICollectionViewLayout *)layout sizeForItemAtIndexPath:(NSIndexPath *)ip {
     CGFloat w = cv.bounds.size.width;
-    CGFloat side = (w - 12*2 - 10*3) / 4.0;
+    CGFloat side = (w - 20*2 - 12*2) / 3.0;
     return CGSizeMake(side, side + 26);
 }
 
@@ -428,11 +443,19 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
     NSString *file = self.files[ip.row];
     NSString *path = [kCCMDir stringByAppendingPathComponent:file];
     [cell.nameButton setTitle:file forState:UIControlStateNormal];
+    cell.nameButton.hidden = NO;
+    // 清理复用残留的编辑输入框（防止盖住名字）
+    for (UIView *v in cell.contentView.subviews) {
+        if ([v isKindOfClass:[UITextField class]] && v != self.activeField) [v removeFromSuperview];
+    }
     cell.deleteButton.hidden = !self.editing;
-    cell.checkView.hidden = YES;
+    cell.videoBadge.hidden = YES;
+    NSString *low = file.pathExtension.lowercaseString;
+    if ([@[@"mp4", @"mov"] containsObject:low]) cell.videoBadge.hidden = NO;
 
     NSString *selKey = ccm_isCompactPage(self.host) ? @"selectedCompactBackgroundFile" : @"selectedExpandedBackgroundFile";
-    if ([ccm_prefString(selKey) isEqualToString:file]) cell.checkView.hidden = NO;
+    BOOL selected = [ccm_prefString(selKey) isEqualToString:file];
+    cell.checkView.hidden = self.editing ? YES : !selected;
 
     __weak typeof(self) ws = self;
     cell.onLongPress = ^{ [ws enterEditing]; };
