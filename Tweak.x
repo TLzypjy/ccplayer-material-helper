@@ -1,5 +1,7 @@
 #import <UIKit/UIKit.h>
-#import <AVKit/AVKit.h>
+#import <Photos/Photos.h>
+#import <AVFoundation/AVFoundation.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <substrate.h>
 #import <objc/runtime.h>
 
@@ -9,12 +11,11 @@
 - (void)reloadSpecifiers;
 @end
 
-// cc播放器 素材导入助手
+// cc播放器 素材导入助手（精简版：仅导入）
 // 注入 Preferences 进程, 在「选择收起/展开背景视频/图片」页加右上角「导入」按钮,
-// 长按素材行可预览 / 改名 / 删除。素材目录与原插件一致。
+// 支持从相册 / 文件 导入视频与图片素材到原插件素材目录。
 static NSString *const kCCMDir = @"/var/mobile/Media/CCMusicModuleBackgrounds";
 static const void *kCCMKeyImportBtn = &kCCMKeyImportBtn;
-static const void *kCCMKeyGesture = &kCCMKeyGesture;
 
 static BOOL ccm_isSelectionPage(UIViewController *vc) {
     if (!vc) return NO;
@@ -30,6 +31,12 @@ static BOOL ccm_supportedName(NSString *name) {
     static NSSet *s = nil;
     if (!s) s = [NSSet setWithArray:@[@"mp4", @"mov", @"gif", @"png", @"jpg", @"jpeg"]];
     return [s containsObject:ext];
+}
+
+static void ccm_ensureDir(void) {
+    if (![[NSFileManager defaultManager] fileExistsAtPath:kCCMDir]) {
+        [[NSFileManager defaultManager] createDirectoryAtPath:kCCMDir withIntermediateDirectories:YES attributes:nil error:nil];
+    }
 }
 
 static NSString *ccm_uniquePath(NSString *dir, NSString *name) {
@@ -50,106 +57,20 @@ static void ccm_reload(id self) {
     }
 }
 
-#pragma mark - 预览
-
-@interface CCMImagePreviewController : UIViewController
-- (void)ccm_setImagePath:(NSString *)path;
-@end
-
-@implementation CCMImagePreviewController
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor blackColor];
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(ccm_dismissSelf)];
-    [self.view addGestureRecognizer:tap];
-}
-- (void)ccm_setImagePath:(NSString *)path {
-    UIImage *img = [UIImage imageWithContentsOfFile:path];
-    if (!img) return;
-    UIImageView *iv = [[UIImageView alloc] initWithImage:img];
-    iv.contentMode = UIViewContentModeScaleAspectFit;
-    iv.frame = self.view.bounds;
-    iv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.view addSubview:iv];
-}
-- (void)ccm_dismissSelf {
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-@end
-
-static void ccm_presentPreview(UIViewController *vc, NSString *path) {
-    NSString *ext = path.pathExtension.lowercaseString;
-    if ([@[@"mp4", @"mov"] containsObject:ext]) {
-        AVPlayerViewController *p = [[AVPlayerViewController alloc] init];
-        p.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:path]];
-        [vc presentViewController:p animated:YES completion:^{ [p.player play]; }];
-    } else {
-        CCMImagePreviewController *pv = [[CCMImagePreviewController alloc] init];
-        [pv ccm_setImagePath:path];
-        [vc presentViewController:pv animated:YES completion:nil];
-    }
-}
-
-#pragma mark - 改名 / 删除
-
-static void ccm_promptRename(UIViewController *vc, NSString *dir, NSString *name) {
-    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"重命名素材" message:nil preferredStyle:UIAlertControllerStyleAlert];
-    [ac addTextFieldWithConfigurationHandler:^(UITextField *tf){
-        tf.text = name;
-        tf.autocapitalizationType = UITextAutocapitalizationTypeNone;
-        tf.autocorrectionType = UITextAutocorrectionTypeNo;
-    }];
-    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
-        UITextField *tf = ac.textFields.firstObject;
-        NSString *newName = [tf.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (!newName.length) return;
-        NSString *ext = name.pathExtension;
-        if (ext.length && ![newName.pathExtension.lowercaseString isEqualToString:ext.lowercaseString]) {
-            newName = [newName stringByAppendingPathExtension:ext];
-        }
-        NSString *src = [dir stringByAppendingPathComponent:name];
-        NSString *dst = ccm_uniquePath(dir, newName);
-        NSError *err = nil;
-        if (![[NSFileManager defaultManager] moveItemAtPath:src toPath:dst error:&err]) {
-            UIAlertController *al = [UIAlertController alertControllerWithTitle:@"改名失败" message:(err.localizedDescription ?: @"请重试") preferredStyle:UIAlertControllerStyleAlert];
+static void ccm_finishImport(UIViewController *picker, UIViewController *host, BOOL ok) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *title = ok ? @"已导入" : @"导入失败";
+        NSString *msg = ok ? @"素材已导入到背景素材目录" : @"请重试";
+        [picker dismissViewControllerAnimated:YES completion:^{
+            ccm_reload(host);
+            UIAlertController *al = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
             [al addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-            [vc presentViewController:al animated:YES completion:nil];
-            return;
-        }
-        ccm_reload(vc);
-    }]];
-    [vc presentViewController:ac animated:YES completion:nil];
+            [host presentViewController:al animated:YES completion:nil];
+        }];
+    });
 }
 
-static void ccm_promptDelete(UIViewController *vc, NSString *dir, NSString *name) {
-    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"删除素材" message:[NSString stringWithFormat:@"确定删除「%@」？", name] preferredStyle:UIAlertControllerStyleAlert];
-    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a){
-        NSString *p = [dir stringByAppendingPathComponent:name];
-        [[NSFileManager defaultManager] removeItemAtPath:p error:nil];
-        ccm_reload(vc);
-    }]];
-    [vc presentViewController:ac animated:YES completion:nil];
-}
-
-static void ccm_showActions(UIViewController *vc, NSString *name) {
-    if (!ccm_supportedName(name)) return;
-    UIAlertController *ac = [UIAlertController alertControllerWithTitle:name message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-    [ac addAction:[UIAlertAction actionWithTitle:@"预览" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
-        ccm_presentPreview(vc, [kCCMDir stringByAppendingPathComponent:name]);
-    }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"改名" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
-        ccm_promptRename(vc, kCCMDir, name);
-    }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a){
-        ccm_promptDelete(vc, kCCMDir, name);
-    }]];
-    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [vc presentViewController:ac animated:YES completion:nil];
-}
-
-#pragma mark - 导入（内置文件浏览器，不依赖系统文件选择器远程服务）
+#pragma mark - 从文件导入（内置文件浏览器，不依赖系统文件选择器远程服务）
 
 @interface CCMFileBrowserController : UITableViewController
 @property (nonatomic, strong) NSString *dir;
@@ -214,19 +135,157 @@ static void ccm_showActions(UIViewController *vc, NSString *name) {
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:name message:@"导入到背景素材目录？" preferredStyle:UIAlertControllerStyleAlert];
     [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [ac addAction:[UIAlertAction actionWithTitle:@"导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
+        ccm_ensureDir();
         NSString *src = [self.dir stringByAppendingPathComponent:name];
         NSString *dst = ccm_uniquePath(kCCMDir, name);
         NSError *err = nil;
         BOOL ok = [[NSFileManager defaultManager] copyItemAtPath:src toPath:dst error:&err];
-        if (ok) {
-            [self dismissViewControllerAnimated:YES completion:^{ ccm_reload(self.host); }];
+        ccm_finishImport(self, self.host, ok);
+    }]];
+    [self presentViewController:ac animated:YES completion:nil];
+}
+- (void)ccm_close {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+@end
+
+#pragma mark - 从相册导入（Photos 框架自制选择器，不走远程服务）
+
+@interface CCMPhotoPickerController : UITableViewController
+@property (nonatomic, strong) NSArray<PHAsset *> *assets;
+@property (nonatomic, weak) UIViewController *host;
+- (instancetype)initWithHost:(UIViewController *)host;
+@end
+
+@implementation CCMPhotoPickerController
+- (instancetype)initWithHost:(UIViewController *)host {
+    self = [super initWithStyle:UITableViewStylePlain];
+    if (self) { _host = host; }
+    return self;
+}
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"从相册导入";
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(ccm_close)];
+    PHAuthorizationStatus st = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
+    if (st == PHAuthorizationStatusNotDetermined) {
+        [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite handler:^(PHAuthorizationStatus s){
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (s == PHAuthorizationStatusAuthorized) [self ccm_load];
+                else [self ccm_showNoAuth];
+            });
+        }];
+    } else if (st == PHAuthorizationStatusAuthorized) {
+        [self ccm_load];
+    } else {
+        [self ccm_showNoAuth];
+    }
+}
+- (void)ccm_load {
+    PHFetchOptions *fo = [PHFetchOptions new];
+    fo.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"creationDate" ascending:NO]];
+    PHFetchResult *res = [PHAsset fetchAssetsWithMediaType:PHAssetMediaTypeAny options:fo];
+    NSMutableArray *arr = [NSMutableArray array];
+    [res enumerateObjectsUsingBlock:^(PHAsset *a, NSUInteger idx, BOOL *stop){
+        [arr addObject:a];
+    }];
+    self.assets = arr;
+    [self.tableView reloadData];
+}
+- (void)ccm_showNoAuth {
+    self.assets = @[];
+    [self.tableView reloadData];
+    UIAlertController *al = [UIAlertController alertControllerWithTitle:@"需要照片权限" message:@"请在 设置 → 隐私与安全性 → 照片 中允许访问照片后重试。" preferredStyle:UIAlertControllerStyleAlert];
+    [al addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:al animated:YES completion:nil];
+}
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 1; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return self.assets.count; }
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *c = [tableView dequeueReusableCellWithIdentifier:@"ccmphoto"];
+    if (!c) c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"ccmphoto"];
+    PHAsset *a = self.assets[ip.row];
+    NSArray *res = [PHAssetResource assetResourcesForAsset:a];
+    NSString *nm = res.count ? ((PHAssetResource *)res.firstObject).originalFilename : @"";
+    if (!nm.length) nm = a.mediaType == PHAssetMediaTypeVideo ? @"视频" : @"图片";
+    c.textLabel.text = nm;
+    c.detailTextLabel.text = a.mediaType == PHAssetMediaTypeVideo ? @"视频" : @"图片";
+    c.imageView.image = nil;
+    PHImageRequestOptions *ro = [PHImageRequestOptions new];
+    ro.networkAccessAllowed = YES;
+    ro.deliveryMode = PHImageRequestOptionsDeliveryModeFastFormat;
+    [[PHImageManager defaultManager] requestImageForAsset:a targetSize:CGSizeMake(88, 88) contentMode:PHImageContentModeAspectFill options:ro resultHandler:^(UIImage *img, NSDictionary *info){
+        if (img) { c.imageView.image = img; [c setNeedsLayout]; }
+    }];
+    return c;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tableView deselectRowAtIndexPath:ip animated:YES];
+    PHAsset *a = self.assets[ip.row];
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"导入这个素材？" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act){
+        ccm_ensureDir();
+        if (a.mediaType == PHAssetMediaTypeVideo) {
+            [self ccm_exportVideo:a];
         } else {
-            UIAlertController *al = [UIAlertController alertControllerWithTitle:@"导入失败" message:(err.localizedDescription ?: @"请重试") preferredStyle:UIAlertControllerStyleAlert];
-            [al addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:al animated:YES completion:nil];
+            [self ccm_exportImage:a];
         }
     }]];
     [self presentViewController:ac animated:YES completion:nil];
+}
+- (void)ccm_exportImage:(PHAsset *)asset {
+    PHImageRequestOptions *o = [PHImageRequestOptions new];
+    o.networkAccessAllowed = YES;
+    o.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
+    [[PHImageManager defaultManager] requestImageDataAndOrientationForAsset:asset options:o resultHandler:^(NSData *data, NSString *dataUTI, CGImagePropertyOrientation orientation, NSDictionary *info){
+        if (!data.length) { ccm_finishImport(self, self.host, NO); return; }
+        UTType *t = [UTType typeWithIdentifier:dataUTI];
+        NSString *ext = t.preferredFilenameExtension;
+        if (!ext.length) ext = @"jpg";
+        NSArray *res = [PHAssetResource assetResourcesForAsset:asset];
+        NSString *base = res.count ? ((PHAssetResource *)res.firstObject).originalFilename.stringByDeletingPathExtension : @"";
+        if (!base.length) base = [NSString stringWithFormat:@"image_%lld", (long long)[NSDate date].timeIntervalSince1970];
+        NSString *dst = ccm_uniquePath(kCCMDir, [base stringByAppendingPathExtension:ext]);
+        BOOL ok = [data writeToFile:dst atomically:YES];
+        ccm_finishImport(self, self.host, ok);
+    }];
+}
+- (void)ccm_exportVideo:(PHAsset *)asset {
+    PHVideoRequestOptions *o = [PHVideoRequestOptions new];
+    o.networkAccessAllowed = YES;
+    o.deliveryMode = PHVideoRequestOptionsDeliveryModeHighQualityFormat;
+    [[PHImageManager defaultManager] requestAVAssetForVideo:asset options:o resultHandler:^(AVAsset *av, AVAudioMix *am, NSDictionary *info){
+        if (!av) { ccm_finishImport(self, self.host, NO); return; }
+        if ([av isKindOfClass:[AVURLAsset class]] && ((AVURLAsset *)av).URL.isFileURL) {
+            NSURL *srcURL = ((AVURLAsset *)av).URL;
+            if (ccm_supportedName(srcURL.lastPathComponent)) {
+                NSError *err = nil;
+                NSString *dst = ccm_uniquePath(kCCMDir, srcURL.lastPathComponent);
+                BOOL ok = [[NSFileManager defaultManager] copyItemAtURL:srcURL toURL:[NSURL fileURLWithPath:dst] error:&err];
+                ccm_finishImport(self, self.host, ok);
+                return;
+            }
+        }
+        NSArray *res = [PHAssetResource assetResourcesForAsset:asset];
+        NSString *base = res.count ? ((PHAssetResource *)res.firstObject).originalFilename.stringByDeletingPathExtension : @"";
+        if (!base.length) base = [NSString stringWithFormat:@"video_%lld", (long long)[NSDate date].timeIntervalSince1970];
+        NSString *tmp = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"ccm_%lld.mp4", (long long)[NSDate date].timeIntervalSince1970]];
+        AVAssetExportSession *ex = [[AVAssetExportSession alloc] initWithAsset:av presetName:AVAssetExportPresetPassthrough];
+        ex.outputURL = [NSURL fileURLWithPath:tmp];
+        ex.outputFileType = AVFileTypeMPEG4;
+        __weak typeof(self) ws = self;
+        [ex exportAsynchronouslyWithCompletionHandler:^{
+            BOOL ok = (ex.status == AVAssetExportSessionStatusCompleted) && [[NSFileManager defaultManager] fileExistsAtPath:tmp];
+            if (ok) {
+                NSString *dst = ccm_uniquePath(kCCMDir, [base stringByAppendingPathExtension:@"mp4"]);
+                NSError *err = nil;
+                ok = [[NSFileManager defaultManager] moveItemAtPath:tmp toPath:dst error:&err];
+                if (!ok) [[NSFileManager defaultManager] removeItemAtPath:tmp error:nil];
+            }
+            ccm_finishImport(ws, ws.host, ok);
+        }];
+    }];
 }
 - (void)ccm_close {
     [self dismissViewControllerAnimated:YES completion:nil];
@@ -253,33 +312,24 @@ static void ccm_showActions(UIViewController *vc, NSString *name) {
     }
 }
 
-- (id)tableView:(id)tableView cellForRowAtIndexPath:(id)indexPath {
-    id cell = %orig;
-    if (ccm_isSelectionPage(self)) {
-        UILongPressGestureRecognizer *g = objc_getAssociatedObject(cell, kCCMKeyGesture);
-        if (!g) {
-            g = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(ccm_longPress:)];
-            [cell addGestureRecognizer:g];
-            objc_setAssociatedObject(cell, kCCMKeyGesture, g, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-    }
-    return cell;
-}
-
 - (void)ccm_importTapped {
-    CCMFileBrowserController *fb = [[CCMFileBrowserController alloc] initWithDir:@"/var/mobile/Media" host:self];
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:fb];
-    [self presentViewController:nav animated:YES completion:nil];
-}
-
-- (void)ccm_longPress:(UILongPressGestureRecognizer *)g {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    UITableViewCell *cell = (UITableViewCell *)g.view;
-    NSIndexPath *ip = [self.table indexPathForCell:cell];
-    if (!ip) return;
-    NSString *name = cell.textLabel.text;
-    if (!name.length) return;
-    ccm_showActions(self, name);
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"导入素材" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [ac addAction:[UIAlertAction actionWithTitle:@"从相册导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
+        CCMPhotoPickerController *pp = [[CCMPhotoPickerController alloc] initWithHost:self];
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:pp];
+        [self presentViewController:nav animated:YES completion:nil];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"从文件导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
+        CCMFileBrowserController *fb = [[CCMFileBrowserController alloc] initWithDir:@"/var/mobile/Media" host:self];
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:fb];
+        [self presentViewController:nav animated:YES completion:nil];
+    }]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    UIBarButtonItem *imp = objc_getAssociatedObject(self, kCCMKeyImportBtn);
+    if (imp && ac.popoverPresentationController) {
+        ac.popoverPresentationController.barButtonItem = imp;
+    }
+    [self presentViewController:ac animated:YES completion:nil];
 }
 
 %end
