@@ -1,0 +1,8 @@
+Package: com.tlzypjy.ccmaterialimporter
+Name: cc播放器素材导入助手
+Author: TL
+Description: 为 cc播放器 的「选择收起/展开背景视频图片」页添加右上角「导入」按钮，支持从文件 App 导入视频/图片素材到 /var/mobile/Media/CCMusicModuleBackgrounds；长按素材可预览、改名、删除。
+Maintainer: TL
+Section: Tweaks
+Architecture: iphoneos-arm64
+Version: 1.0
