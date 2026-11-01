@@ -1,6 +1,5 @@
 #import <UIKit/UIKit.h>
 #import <AVKit/AVKit.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <substrate.h>
 #import <objc/runtime.h>
 
@@ -16,7 +15,6 @@
 static NSString *const kCCMDir = @"/var/mobile/Media/CCMusicModuleBackgrounds";
 static const void *kCCMKeyImportBtn = &kCCMKeyImportBtn;
 static const void *kCCMKeyGesture = &kCCMKeyGesture;
-static const void *kCCMKeyPickerDelegate = &kCCMKeyPickerDelegate;
 
 static BOOL ccm_isSelectionPage(UIViewController *vc) {
     if (!vc) return NO;
@@ -151,29 +149,87 @@ static void ccm_showActions(UIViewController *vc, NSString *name) {
     [vc presentViewController:ac animated:YES completion:nil];
 }
 
-#pragma mark - 导入（文件选择器）
+#pragma mark - 导入（内置文件浏览器，不依赖系统文件选择器远程服务）
 
-@interface CCMImportPickerDelegate : NSObject <UIDocumentPickerDelegate>
+@interface CCMFileBrowserController : UITableViewController
+@property (nonatomic, strong) NSString *dir;
+@property (nonatomic, strong) NSArray<NSString *> *subdirs;
+@property (nonatomic, strong) NSArray<NSString *> *files;
 @property (nonatomic, weak) UIViewController *host;
+- (instancetype)initWithDir:(NSString *)dir host:(UIViewController *)host;
 @end
 
-@implementation CCMImportPickerDelegate
-- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+@implementation CCMFileBrowserController
+- (instancetype)initWithDir:(NSString *)dir host:(UIViewController *)host {
+    self = [super initWithStyle:UITableViewStylePlain];
+    if (self) { _dir = dir; _host = host; }
+    return self;
+}
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = self.dir.lastPathComponent.length ? self.dir.lastPathComponent : self.dir;
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(ccm_close)];
     NSFileManager *fm = [NSFileManager defaultManager];
-    if (![fm fileExistsAtPath:kCCMDir]) {
-        [fm createDirectoryAtPath:kCCMDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSArray *all = [fm contentsOfDirectoryAtPath:self.dir error:nil] ?: @[];
+    NSMutableArray *subs = [NSMutableArray array], *fls = [NSMutableArray array];
+    for (NSString *n in all) {
+        NSString *p = [self.dir stringByAppendingPathComponent:n];
+        BOOL isDir = NO;
+        [fm fileExistsAtPath:p isDirectory:&isDir];
+        if (isDir) [subs addObject:n];
+        else if (ccm_supportedName(n)) [fls addObject:n];
     }
-    for (NSURL *u in urls) {
-        BOOL scoped = [u startAccessingSecurityScopedResource];
-        NSString *name = u.lastPathComponent;
+    [subs sortUsingSelector:@selector(localizedStandardCompare:)];
+    [fls sortUsingSelector:@selector(localizedStandardCompare:)];
+    self.subdirs = subs;
+    self.files = fls;
+}
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    return section == 0 ? @"文件夹" : @"视频 / 图片";
+}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return section == 0 ? self.subdirs.count : self.files.count;
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)ip {
+    UITableViewCell *c = [tableView dequeueReusableCellWithIdentifier:@"ccmcell"];
+    if (!c) c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"ccmcell"];
+    if (ip.section == 0) {
+        c.textLabel.text = self.subdirs[ip.row];
+        c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else {
+        c.textLabel.text = self.files[ip.row];
+        c.accessoryType = UITableViewCellAccessoryNone;
+    }
+    return c;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tableView deselectRowAtIndexPath:ip animated:YES];
+    if (ip.section == 0) {
+        CCMFileBrowserController *sub = [[CCMFileBrowserController alloc] initWithDir:[self.dir stringByAppendingPathComponent:self.subdirs[ip.row]] host:self.host];
+        [self.navigationController pushViewController:sub animated:YES];
+        return;
+    }
+    NSString *name = self.files[ip.row];
+    UIAlertController *ac = [UIAlertController alertControllerWithTitle:name message:@"导入到背景素材目录？" preferredStyle:UIAlertControllerStyleAlert];
+    [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [ac addAction:[UIAlertAction actionWithTitle:@"导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
+        NSString *src = [self.dir stringByAppendingPathComponent:name];
         NSString *dst = ccm_uniquePath(kCCMDir, name);
         NSError *err = nil;
-        [fm copyItemAtURL:u toURL:[NSURL fileURLWithPath:dst] error:&err];
-        if (scoped) [u stopAccessingSecurityScopedResource];
-    }
-    ccm_reload(self.host);
+        BOOL ok = [[NSFileManager defaultManager] copyItemAtPath:src toPath:dst error:&err];
+        if (ok) {
+            [self dismissViewControllerAnimated:YES completion:^{ ccm_reload(self.host); }];
+        } else {
+            UIAlertController *al = [UIAlertController alertControllerWithTitle:@"导入失败" message:(err.localizedDescription ?: @"请重试") preferredStyle:UIAlertControllerStyleAlert];
+            [al addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:al animated:YES completion:nil];
+        }
+    }]];
+    [self presentViewController:ac animated:YES completion:nil];
 }
-- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+- (void)ccm_close {
+    [self dismissViewControllerAnimated:YES completion:nil];
 }
 @end
 
@@ -211,14 +267,9 @@ static void ccm_showActions(UIViewController *vc, NSString *name) {
 }
 
 - (void)ccm_importTapped {
-    CCMImportPickerDelegate *d = [[CCMImportPickerDelegate alloc] init];
-    d.host = self;
-    objc_setAssociatedObject(self, kCCMKeyPickerDelegate, d, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    NSArray *types = @[UTTypeMovie, UTTypeImage];
-    UIDocumentPickerViewController *pk = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types asCopy:YES];
-    pk.delegate = d;
-    pk.allowsMultipleSelection = YES;
-    [self presentViewController:pk animated:YES completion:nil];
+    CCMFileBrowserController *fb = [[CCMFileBrowserController alloc] initWithDir:@"/var/mobile/Media" host:self];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:fb];
+    [self presentViewController:nav animated:YES completion:nil];
 }
 
 - (void)ccm_longPress:(UILongPressGestureRecognizer *)g {
