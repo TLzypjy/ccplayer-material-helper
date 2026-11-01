@@ -4,6 +4,12 @@
 #import <substrate.h>
 #import <objc/runtime.h>
 
+// 补齐 PSListController 完整声明（系统头里只有前向声明，Logos 编译需要父类信息）
+@interface PSListController : UITableViewController
+@property (nonatomic, readonly) UITableView *table;
+- (void)reloadSpecifiers;
+@end
+
 // cc播放器 素材导入助手
 // 注入 Preferences 进程, 在「选择收起/展开背景视频/图片」页加右上角「导入」按钮,
 // 长按素材行可预览 / 改名 / 删除。素材目录与原插件一致。
