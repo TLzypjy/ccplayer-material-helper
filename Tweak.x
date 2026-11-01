@@ -292,27 +292,9 @@ static void ccm_finishImport(UIViewController *picker, UIViewController *host, B
 }
 @end
 
-#pragma mark - Hook（注入 Preferences 进程）
+#pragma mark - 导入入口（C 函数实现，手动注册 selector，避免 Logos 自动注册失效导致 unrecognized selector 崩溃）
 
-%hook PSListController
-
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    if (!ccm_isSelectionPage(self)) return;
-    UIBarButtonItem *imp = objc_getAssociatedObject(self, kCCMKeyImportBtn);
-    if (!imp) {
-        imp = [[UIBarButtonItem alloc] initWithTitle:@"导入" style:UIBarButtonItemStylePlain target:self action:@selector(ccm_importTapped)];
-        objc_setAssociatedObject(self, kCCMKeyImportBtn, imp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    NSArray *items = self.navigationItem.rightBarButtonItems;
-    if (![items containsObject:imp]) {
-        NSMutableArray *arr = items.count ? [items mutableCopy] : [NSMutableArray array];
-        [arr addObject:imp];
-        self.navigationItem.rightBarButtonItems = arr;
-    }
-}
-
-- (void)ccm_importTapped {
+static void ccm_importTappedImpl(id self, SEL _cmd) {
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"导入素材" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     [ac addAction:[UIAlertAction actionWithTitle:@"从相册导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
         CCMPhotoPickerController *pp = [[CCMPhotoPickerController alloc] initWithHost:self];
@@ -330,6 +312,31 @@ static void ccm_finishImport(UIViewController *picker, UIViewController *host, B
         ac.popoverPresentationController.barButtonItem = imp;
     }
     [self presentViewController:ac animated:YES completion:nil];
+}
+
+#pragma mark - Hook（注入 Preferences 进程）
+
+%hook PSListController
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (!ccm_isSelectionPage(self)) return;
+    // 确保「导入」selector 已注册到当前 controller 类（手动 addMethod，兜底 Logos 自动注册）
+    SEL sel = @selector(ccm_importTapped);
+    if (![self respondsToSelector:sel]) {
+        class_addMethod([self class], sel, (IMP)(void(*)(id,SEL))ccm_importTappedImpl, "v@:");
+    }
+    UIBarButtonItem *imp = objc_getAssociatedObject(self, kCCMKeyImportBtn);
+    if (!imp) {
+        imp = [[UIBarButtonItem alloc] initWithTitle:@"导入" style:UIBarButtonItemStylePlain target:self action:sel];
+        objc_setAssociatedObject(self, kCCMKeyImportBtn, imp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    NSArray *items = self.navigationItem.rightBarButtonItems;
+    if (![items containsObject:imp]) {
+        NSMutableArray *arr = items.count ? [items mutableCopy] : [NSMutableArray array];
+        [arr addObject:imp];
+        self.navigationItem.rightBarButtonItems = arr;
+    }
 }
 
 %end
