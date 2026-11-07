@@ -21,7 +21,7 @@
 static NSString *const kCCMDir = @"/var/mobile/Media/CCMusicModuleBackgrounds";
 static NSString *const kCCMPrefsDomain = @"com.codex.ccmusicmodule.reborn";
 static NSString *const kCCMPrefsChanged = @"com.codex.ccmusicmodule.reborn.prefschanged";
-static NSString *const kCCMGridChanged = @"ccmBackgroundsChanged";
+static NSString *const kCCMGridChanged = @"ccm2BackgroundsChanged";
 static const void *kCCMKeyImportBtn = &kCCMKeyImportBtn;
 static const void *kCCMKeyGridView = &kCCMKeyGridView;
 static const void *kCCMKeyDoneBtn = &kCCMKeyDoneBtn;
@@ -93,7 +93,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 #pragma mark - 素材网格 Cell
 
-@interface CCMBgCell : UICollectionViewCell
+@interface CCM2BgCell : UICollectionViewCell
 @property (nonatomic, strong) UIImageView *thumbView;
 @property (nonatomic, strong) UIButton *nameButton;
 @property (nonatomic, strong) UIButton *deleteButton;
@@ -106,7 +106,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 - (void)setJiggling:(BOOL)jiggle;
 @end
 
-@implementation CCMBgCell
+@implementation CCM2BgCell
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
@@ -211,7 +211,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 #pragma mark - 素材网格视图
 
-@interface CCMBackgroundsGridView : UIView <UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout, UITextFieldDelegate>
+@interface CCM2BackgroundsGridView : UIView <UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout, UITextFieldDelegate>
 @property (nonatomic, strong) UICollectionView *cv;
 @property (nonatomic, strong) NSMutableArray<NSString *> *files;
 @property (nonatomic, assign) BOOL editing;
@@ -222,7 +222,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 @property (nonatomic, strong) UILabel *footerLabel;
 @end
 
-@implementation CCMBackgroundsGridView
+@implementation CCM2BackgroundsGridView
 
 - (instancetype)initWithFrame:(CGRect)frame host:(UIViewController *)host {
     self = [super initWithFrame:frame];
@@ -240,7 +240,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         _cv.dataSource = self;
         _cv.delegate = self;
         _cv.alwaysBounceVertical = YES;
-        [_cv registerClass:[CCMBgCell class] forCellWithReuseIdentifier:@"ccmbg"];
+        [_cv registerClass:[CCM2BgCell class] forCellWithReuseIdentifier:@"ccmbg"];
         [_cv registerClass:[UICollectionReusableView class] forSupplementaryViewOfKind:UICollectionElementKindSectionFooter withReuseIdentifier:@"ccmfooter"];
         [self addSubview:_cv];
 
@@ -292,11 +292,11 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 }
 
 - (void)ccm_startJiggling {
-    for (CCMBgCell *c in self.cv.visibleCells) [c setJiggling:YES];
+    for (CCM2BgCell *c in self.cv.visibleCells) [c setJiggling:YES];
 }
 
 - (void)ccm_stopJiggling {
-    for (CCMBgCell *c in self.cv.visibleCells) [c setJiggling:NO];
+    for (CCM2BgCell *c in self.cv.visibleCells) [c setJiggling:NO];
 }
 
 #pragma mark 编辑态
@@ -352,7 +352,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
     if (!self.files.count) return;
     // 先结束上一次未完成的编辑
     if (self.activeField) [self.activeField resignFirstResponder];
-    CCMBgCell *cell = (CCMBgCell *)[self.cv cellForItemAtIndexPath:ip];
+    CCM2BgCell *cell = (CCM2BgCell *)[self.cv cellForItemAtIndexPath:ip];
     if (!cell) return;
     UITextField *tf = [[UITextField alloc] initWithFrame:cell.nameButton.frame];
     tf.borderStyle = UITextBorderStyleRoundedRect;
@@ -381,7 +381,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
     NSString *old = ip.row < self.files.count ? self.files[ip.row] : nil;
     NSString *newBase = [textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
     // 先恢复当前 cell 的 UI，再改名刷新（避免 reload 复用残留输入框盖住其他名字）
-    CCMBgCell *curCell = (CCMBgCell *)[self.cv cellForItemAtIndexPath:ip];
+    CCM2BgCell *curCell = (CCM2BgCell *)[self.cv cellForItemAtIndexPath:ip];
     [textField removeFromSuperview];
     self.activeField = nil;
     self.activeIndex = nil;
@@ -401,7 +401,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 #pragma mark 缩略图加载
 
-- (void)ccm_loadThumb:(NSString *)path into:(CCMBgCell *)cell at:(NSIndexPath *)ip {
+- (void)ccm_loadThumb:(NSString *)path into:(CCM2BgCell *)cell at:(NSIndexPath *)ip {
     cell.currentPath = path;
     cell.thumbView.image = nil;
     NSString *ext = path.pathExtension.lowercaseString;
@@ -444,7 +444,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 }
 
 - (UICollectionViewCell *)collectionView:(UICollectionView *)cv cellForItemAtIndexPath:(NSIndexPath *)ip {
-    CCMBgCell *cell = [cv dequeueReusableCellWithReuseIdentifier:@"ccmbg" forIndexPath:ip];
+    CCM2BgCell *cell = [cv dequeueReusableCellWithReuseIdentifier:@"ccmbg" forIndexPath:ip];
     NSString *file = self.files[ip.row];
     NSString *path = [kCCMDir stringByAppendingPathComponent:file];
     [cell.nameButton setTitle:file forState:UIControlStateNormal];
@@ -504,19 +504,19 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 #pragma mark - 系统原生选择器协调器（相册=PHPicker, 文件=UIDocumentPicker）
 
-@interface CCMImportCoordinator : NSObject <PHPickerViewControllerDelegate, UIDocumentPickerDelegate>
+@interface CCM2ImportCoordinator : NSObject <PHPickerViewControllerDelegate, UIDocumentPickerDelegate>
 @property (nonatomic, weak) id host;
 + (instancetype)shared;
 - (void)presentPhotoPickerFrom:(id)host;
 - (void)presentDocumentPickerFrom:(id)host;
 @end
 
-@implementation CCMImportCoordinator
+@implementation CCM2ImportCoordinator
 
 + (instancetype)shared {
-    static CCMImportCoordinator *s = nil;
+    static CCM2ImportCoordinator *s = nil;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ s = [[CCMImportCoordinator alloc] init]; });
+    dispatch_once(&once, ^{ s = [[CCM2ImportCoordinator alloc] init]; });
     return s;
 }
 
@@ -603,13 +603,13 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 #pragma mark - 导入入口（C 函数实现，手动注册 selector，避免 Logos 自动注册失效导致 unrecognized selector 崩溃）
 
-static void ccm_importTappedImpl(id self, SEL _cmd) {
+static void ccm2_importTappedImpl(id self, SEL _cmd) {
     UIAlertController *ac = [UIAlertController alertControllerWithTitle:@"导入素材" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     [ac addAction:[UIAlertAction actionWithTitle:@"从相册导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
-        [[CCMImportCoordinator shared] presentPhotoPickerFrom:self];
+        [[CCM2ImportCoordinator shared] presentPhotoPickerFrom:self];
     }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"从文件导入" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a){
-        [[CCMImportCoordinator shared] presentDocumentPickerFrom:self];
+        [[CCM2ImportCoordinator shared] presentDocumentPickerFrom:self];
     }]];
     [ac addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     UIBarButtonItem *imp = objc_getAssociatedObject(self, kCCMKeyImportBtn);
@@ -626,9 +626,16 @@ static void ccm_importTappedImpl(id self, SEL _cmd) {
 - (void)viewDidLoad {
     %orig;
     if (!ccm_isSelectionPage(self)) return;
-    CCMBackgroundsGridView *gv = objc_getAssociatedObject(self, kCCMKeyGridView);
+    // 移除旧版导入器（CCMaterialImporter.dylib）留下的网格，避免两层叠加
+    Class legacyCls = NSClassFromString(@"CCMBackgroundsGridView");
+    if (legacyCls) {
+        for (UIView *v in [self.view subviews]) {
+            if ([v isKindOfClass:legacyCls]) [v removeFromSuperview];
+        }
+    }
+    CCM2BackgroundsGridView *gv = objc_getAssociatedObject(self, kCCMKeyGridView);
     if (!gv) {
-        gv = [[CCMBackgroundsGridView alloc] initWithFrame:self.view.bounds host:self];
+        gv = [[CCM2BackgroundsGridView alloc] initWithFrame:self.view.bounds host:self];
         gv.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [self.view addSubview:gv];
         objc_setAssociatedObject(self, kCCMKeyGridView, gv, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -639,9 +646,9 @@ static void ccm_importTappedImpl(id self, SEL _cmd) {
     %orig;
     if (!ccm_isSelectionPage(self)) return;
     // 确保「导入」selector 已注册到当前 controller 类（手动 addMethod，兜底 Logos 自动注册）
-    SEL sel = @selector(ccm_importTapped);
+    SEL sel = @selector(ccm2_importTapped);
     if (![self respondsToSelector:sel]) {
-        class_addMethod([self class], sel, (IMP)(void(*)(id,SEL))ccm_importTappedImpl, "v@:");
+        class_addMethod([self class], sel, (IMP)(void(*)(id,SEL))ccm2_importTappedImpl, "v@:");
     }
     UIBarButtonItem *imp = objc_getAssociatedObject(self, kCCMKeyImportBtn);
     if (!imp) {
@@ -654,6 +661,8 @@ static void ccm_importTappedImpl(id self, SEL _cmd) {
         [arr addObject:imp];
         self.navigationItem.rightBarButtonItems = arr;
     }
+    CCM2BackgroundsGridView *gv2 = objc_getAssociatedObject(self, kCCMKeyGridView);
+    if (gv2.superview) [self.view bringSubviewToFront:gv2];
 }
 
 %end
