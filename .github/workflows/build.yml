@@ -44,9 +44,19 @@ jobs:
         run: |
           make clean
           make FINALPACKAGE=1
+          echo "=== Build output ==="
+          find .theos -name "*.dylib" -o -name "*.deb" 2>/dev/null || true
+          ls -la packages/ 2>/dev/null || echo "no packages/ dir"
 
-      - name: Upload .deb
+      - name: Collect artifacts
+        run: |
+          mkdir -p upload
+          find . -name "*.deb" -type f -exec cp {} upload/ \; 2>/dev/null || true
+          find .theos -name "*.dylib" -type f -exec cp {} upload/ \; 2>/dev/null || true
+          ls -la upload/
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ccmaterial-deb
-          path: packages/*.deb
+          path: upload/*
