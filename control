@@ -1,8 +1,8 @@
-Package: com.tlzypjy.ccmaterialimporter
-Name: CC播放器 网格素材库
-Description: cc播放器 素材库网格化: 缩略图网格+系统导入+长按删除+就地改名
+Package: com.tlzypjy.ccmaterialgrid
+Name: CC播放器 网格素材库v2
+Description: cc播放器 素材库网格化(CCAudioPlay风格): 缩略图网格+系统导入+长按删除+就地改名
 Maintainer: TLzypjy
 Author: TLzypjy
 Section: Tweaks
-Depends: firmware (>= 14.0), preferenceloader, mobilesubstrate
+Depends: firmware (>= 14.0), mobilesubstrate
 Architecture: iphoneos-arm64
