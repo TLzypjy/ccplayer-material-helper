@@ -113,12 +113,17 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         _thumbView = [[UIImageView alloc] initWithFrame:CGRectZero];
         _thumbView.contentMode = UIViewContentModeScaleAspectFill;
         _thumbView.clipsToBounds = YES;
-        _thumbView.layer.cornerRadius = 8;
+        _thumbView.layer.cornerRadius = 14;
         _thumbView.userInteractionEnabled = YES;
+        _thumbView.backgroundColor = [UIColor colorWithWhite:0.94 alpha:1.0];
         [self.contentView addSubview:_thumbView];
 
         _nameButton = [UIButton buttonWithType:UIButtonTypeCustom];
         _nameButton.titleLabel.font = [UIFont systemFontOfSize:10];
+        _nameButton.backgroundColor = [UIColor colorWithWhite:0.62 alpha:0.85];
+        _nameButton.layer.cornerRadius = 11;
+        _nameButton.layer.masksToBounds = YES;
+        [_nameButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         _nameButton.titleLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
         _nameButton.titleLabel.numberOfLines = 1;
         [_nameButton setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
@@ -128,9 +133,9 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         _deleteButton = [UIButton buttonWithType:UIButtonTypeSystem];
         [_deleteButton setTitle:@"−" forState:UIControlStateNormal];
         [_deleteButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        _deleteButton.titleLabel.font = [UIFont boldSystemFontOfSize:14];
+        _deleteButton.titleLabel.font = [UIFont boldSystemFontOfSize:19];
         _deleteButton.backgroundColor = [UIColor systemRedColor];
-        _deleteButton.layer.cornerRadius = 10;
+        _deleteButton.layer.cornerRadius = 13;
         _deleteButton.layer.masksToBounds = YES;
         _deleteButton.hidden = YES;
         [_deleteButton addTarget:self action:@selector(ccm_deleteTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -171,10 +176,10 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
     CGFloat h = self.contentView.bounds.size.height;
     CGFloat thumbH = h - 26;
     self.thumbView.frame = CGRectMake(0, 0, w, thumbH);
-    self.nameButton.frame = CGRectMake(0, thumbH + 2, w, 22);
+    self.nameButton.frame = CGRectMake(6, thumbH + 2, w - 8, 22);
     self.deleteButton.frame = CGRectMake(w - 24, 4, 20, 20);
-    self.videoBadge.frame = CGRectMake(6, thumbH - 26, 20, 20);
-    self.checkView.frame = CGRectMake(w - 24, thumbH - 32, 22, 22);
+    self.videoBadge.frame = CGRectMake(6, thumbH - 26, 22, 22);
+    self.checkView.frame = CGRectMake(w - 26, thumbH - 34, 22, 22);
 }
 
 - (void)ccm_longPressed:(UILongPressGestureRecognizer *)g {
@@ -226,12 +231,12 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
         UICollectionViewFlowLayout *fl = [[UICollectionViewFlowLayout alloc] init];
         fl.scrollDirection = UICollectionViewScrollDirectionVertical;
-        fl.minimumInteritemSpacing = 12;
-        fl.minimumLineSpacing = 16;
-        fl.sectionInset = UIEdgeInsetsMake(20, 20, 20, 20);
+        fl.minimumInteritemSpacing = 0;
+        fl.minimumLineSpacing = 14;
+        fl.sectionInset = UIEdgeInsetsMake(14, 16, 70, 16);
 
         _cv = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:fl];
-        _cv.backgroundColor = [UIColor systemGroupedBackgroundColor];
+        _cv.backgroundColor = [UIColor colorWithWhite:0.94 alpha:1.0];
         _cv.dataSource = self;
         _cv.delegate = self;
         _cv.alwaysBounceVertical = YES;
@@ -434,7 +439,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 - (CGSize)collectionView:(UICollectionView *)cv layout:(UICollectionViewLayout *)layout sizeForItemAtIndexPath:(NSIndexPath *)ip {
     CGFloat w = cv.bounds.size.width;
-    CGFloat side = (w - 20*2 - 12*2) / 3.0;
+    CGFloat side = (w - 32.0) / 3.0;
     return CGSizeMake(side, side + 26);
 }
 
