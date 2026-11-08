@@ -626,6 +626,8 @@ static void ccm2_importTappedImpl(id self, SEL _cmd) {
 
 @interface MCCContentViewController : UIViewController
 @property (nonatomic, strong) AVPlayer *videoPlayer;
+- (BOOL)isNowPlaying;
+- (void)ccm2_tameVideo;
 @end
 
 static void ccm2_killVideoAudioOnce(AVPlayer *player) {
@@ -691,7 +693,7 @@ static void ccm2_killVideoAudio(AVPlayer *player) {
     if (!p) return;
     BOOL musicPlaying = NO;
     if ([self respondsToSelector:@selector(isNowPlaying)]) {
-        musicPlaying = [(id)self isNowPlaying];
+        musicPlaying = [self isNowPlaying];
     }
     if (musicPlaying) {
         [p pause];
