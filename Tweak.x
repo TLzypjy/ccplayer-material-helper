@@ -487,7 +487,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         self.footerLabel.numberOfLines = 0;
         self.footerLabel.font = [UIFont systemFontOfSize:12];
         self.footerLabel.textColor = [UIColor secondaryLabelColor];
-        self.footerLabel.text = @"将多个 mp4/mov/gif/png/jpg/jpeg 放到 /var/mobile/Media/CCMusicModuleBackgrounds。这里选择的素材只会作用到当前这个状态；如果这个状态还没单独选过，就会回退到默认背景选择。\n\n长按素材进入编辑模式：点红色 − 删除，点名字改名。背景视频已强制静音，不会打断音乐。";
+        self.footerLabel.text = @"将多个 mp4/mov/gif/png/jpg/jpeg 放到 /var/mobile/Media/CCMusicModuleBackgrounds。这里选择的素材只会作用到当前这个状态；如果这个状态还没单独选过，就会回退到默认背景选择。\n\n长按素材进入编辑模式：点红色 − 删除，点名字改名。视频导入时自动去除声音，不会打断音乐。";
         [v addSubview:self.footerLabel];
     }
     return v;
@@ -542,15 +542,62 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
     [host presentViewController:dp animated:YES completion:nil];
 }
 
-- (void)ccm_copyIntoMaterials:(NSURL *)src base:(NSString *)base ext:(NSString *)ext {
-    if (!src) return;
+- (void)ccm_copyIntoMaterials:(NSURL *)src base:(NSString *)base ext:(NSString *)ext done:(void (^)(void))done {
+    if (!src) { if (done) done(); return; }
     ccm_ensureDir();
     if (!base.length) base = src.lastPathComponent.stringByDeletingPathExtension;
     if (!ext.length) ext = src.pathExtension;
     if (!ext.length) ext = @"jpg";
+    NSString *low = ext.lowercaseString;
     NSString *dst = ccm_uniquePath(kCCMDir, [base stringByAppendingPathExtension:ext]);
+
+    // 视频素材：剔除音轨后入库（静音视频不会激活音频会话，不打断音乐 App）
+    if ([@[@"mp4", @"mov"] containsObject:low]) {
+        [self ccm_exportSilentVideo:src toPath:dst fileType:([low isEqualToString:@"mov"] ? AVFileTypeQuickTimeMovie : AVFileTypeMPEG4) done:^{
+            if (done) done();
+        }];
+        return;
+    }
+
     NSError *err = nil;
     [[NSFileManager defaultManager] copyItemAtURL:src toURL:[NSURL fileURLWithPath:dst] error:&err];
+    if (done) done();
+}
+
+// 用 AVMutableComposition 只保留视频轨并导出（画面、时长、旋转都保留）
+- (void)ccm_exportSilentVideo:(NSURL *)src toPath:(NSString *)dstPath fileType:(AVFileType)ft done:(void (^)(void))done {
+    AVURLAsset *asset = [AVURLAsset assetWithURL:src];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        AVMutableComposition *comp = [AVMutableComposition composition];
+        AVAssetTrack *v = [[asset tracksWithMediaType:AVMediaTypeVideo] firstObject];
+        BOOL ok = NO;
+        if (v) {
+            NSError *e = nil;
+            AVMutableCompositionTrack *ct = [comp addMutableTrackWithMediaType:AVMediaTypeVideo preferredTrackID:kCMPersistentTrackID_Invalid];
+            ok = [ct insertTimeRange:CMTimeRangeMake(kCMTimeZero, asset.duration) ofTrack:v atTime:kCMTimeZero error:&e];
+            if (ok) ct.preferredTransform = v.preferredTransform;
+        }
+        if (!ok) {
+            [[NSFileManager defaultManager] copyItemAtURL:src toURL:[NSURL fileURLWithPath:dstPath] error:nil];
+            dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(); });
+            return;
+        }
+        AVAssetExportSession *ex = [AVAssetExportSession exportSessionWithAsset:comp presetName:AVAssetExportPresetHighestQuality];
+        if (!ex) {
+            [[NSFileManager defaultManager] copyItemAtURL:src toURL:[NSURL fileURLWithPath:dstPath] error:nil];
+            dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(); });
+            return;
+        }
+        ex.outputURL = [NSURL fileURLWithPath:dstPath];
+        ex.outputFileType = ft;
+        [ex exportAsynchronouslyWithCompletionHandler:^{
+            if (ex.status != AVAssetExportStatusCompleted) {
+                [[NSFileManager defaultManager] removeItemAtPath:dstPath error:nil];
+                [[NSFileManager defaultManager] copyItemAtURL:src toURL:[NSURL fileURLWithPath:dstPath] error:nil];
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{ if (done) done(); });
+        }];
+    });
 }
 
 - (void)ccm_notifyHost {
@@ -581,11 +628,15 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
                 if (url) {
                     NSString *ext = url.pathExtension;
                     if (!ext.length) ext = [UTType typeWithIdentifier:typeId].preferredFilenameExtension;
-                    [self ccm_copyIntoMaterials:url base:suggested ext:ext];
+                    [self ccm_copyIntoMaterials:url base:suggested ext:ext done:^{
+                        pending--;
+                        if (pending == 0) [self ccm_notifyHost];
+                    }];
+                } else {
+                    pending--;
+                    if (pending == 0) [self ccm_notifyHost];
                 }
-                pending--;
-                if (pending == 0) [self ccm_notifyHost];
-            }];
+            });
         }
     }];
 }
@@ -595,10 +646,13 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     [controller dismissViewControllerAnimated:YES completion:^{
         if (!urls.count) return;
+        __block NSInteger pending = (NSInteger)urls.count;
         for (NSURL *u in urls) {
-            [self ccm_copyIntoMaterials:u base:u.lastPathComponent.stringByDeletingPathExtension ext:u.pathExtension];
+            [self ccm_copyIntoMaterials:u base:u.lastPathComponent.stringByDeletingPathExtension ext:u.pathExtension done:^{
+                pending--;
+                if (pending == 0) [self ccm_notifyHost];
+            }];
         }
-        [self ccm_notifyHost];
     }];
 }
 
@@ -691,15 +745,22 @@ static void ccm2_killVideoAudio(AVPlayer *player) {
 - (void)ccm2_tameVideo {
     AVPlayer *p = self.videoPlayer;
     if (!p) return;
+    AVPlayerItem *item = p.currentItem;
+    BOOL hasAudio = NO;
+    for (AVPlayerItemTrack *t in item.tracks) {
+        AVAssetTrack *at = t.assetTrack;
+        if (at && [at.mediaType isEqualToString:AVMediaTypeAudio]) { hasAudio = YES; break; }
+    }
     BOOL musicPlaying = NO;
     if ([self respondsToSelector:@selector(isNowPlaying)]) {
         musicPlaying = [self isNowPlaying];
     }
-    if (musicPlaying) {
+    // 只有带音轨的视频才需要在音乐播放时暂停；静音视频可以一直动画
+    if (musicPlaying && hasAudio) {
         [p pause];
         p.rate = 0.0;
     }
-    ccm2_killVideoAudio(p);
+    ccm2_killVideoAudioOnce(p);
 }
 
 %end
