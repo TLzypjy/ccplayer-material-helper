@@ -669,7 +669,35 @@ static void ccm2_killVideoAudio(AVPlayer *player) {
 
 - (void)ccm_applyBackgroundIfNeeded {
     %orig;
-    ccm2_killVideoAudio(self.videoPlayer);
+    [self ccm2_tameVideo];
+}
+
+- (void)ccm_videoPlayerItemDidPlayToEnd:(id)note {
+    %orig;
+    [self ccm2_tameVideo];
+}
+
+// 模块每秒 tick 都会同步一次；在音乐真正在播时把背景视频暂停掉，
+// 避免其音频会话反复打断音乐 App（只有从模块按钮发起的播放才会压制视频，
+// 音乐 App 自己播放时模块不知道，所以这里兜底）
+- (void)syncPlaybackStateAndUpdateUI {
+    %orig;
+    [self ccm2_tameVideo];
+}
+
+%new
+- (void)ccm2_tameVideo {
+    AVPlayer *p = self.videoPlayer;
+    if (!p) return;
+    BOOL musicPlaying = NO;
+    if ([self respondsToSelector:@selector(isNowPlaying)]) {
+        musicPlaying = [(id)self isNowPlaying];
+    }
+    if (musicPlaying) {
+        [p pause];
+        p.rate = 0.0;
+    }
+    ccm2_killVideoAudio(p);
 }
 
 %end
