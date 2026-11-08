@@ -7,7 +7,7 @@ TWEAK_NAME = CCMaterialGrid
 CCMaterialGrid_FILES = Tweak.x
 CCMaterialGrid_CFLAGS = -fobjc-arc -Wno-unused-function
 CCMaterialGrid_FRAMEWORKS = UIKit AVKit UniformTypeIdentifiers
-CCMaterialGrid_LDFLAGS = -lsubstrate -Wl,-no_fixup_chains
+CCMaterialGrid_LDFLAGS = -lsubstrate
 
 include $(THEOS)/makefiles/common.mk
 include $(THEOS)/makefiles/tweak.mk
