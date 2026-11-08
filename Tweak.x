@@ -487,7 +487,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         self.footerLabel.numberOfLines = 0;
         self.footerLabel.font = [UIFont systemFontOfSize:12];
         self.footerLabel.textColor = [UIColor secondaryLabelColor];
-        self.footerLabel.text = @"将多个 mp4/mov/gif/png/jpg/jpeg 放到 /var/mobile/Media/CCMusicModuleBackgrounds。这里选择的素材只会作用到当前这个状态；如果这个状态还没单独选过，就会回退到默认背景选择。\n\n长按素材进入编辑模式：点红色 − 删除，点名字改名。";
+        self.footerLabel.text = @"将多个 mp4/mov/gif/png/jpg/jpeg 放到 /var/mobile/Media/CCMusicModuleBackgrounds。这里选择的素材只会作用到当前这个状态；如果这个状态还没单独选过，就会回退到默认背景选择。\n\n长按素材进入编辑模式：点红色 − 删除，点名字改名。背景视频已强制静音，不会打断音乐。";
         [v addSubview:self.footerLabel];
     }
     return v;
@@ -621,6 +621,58 @@ static void ccm2_importTappedImpl(id self, SEL _cmd) {
     }
     [self presentViewController:ac animated:YES completion:nil];
 }
+
+#pragma mark - 背景视频静音（SpringBoard：防止背景视频声音打断音乐 App）
+
+@interface MCCContentViewController : UIViewController
+@property (nonatomic, strong) AVPlayer *videoPlayer;
+@end
+
+static void ccm2_killVideoAudioOnce(AVPlayer *player) {
+    if (!player) return;
+    player.muted = YES;
+    AVPlayerItem *item = player.currentItem;
+    if (!item) return;
+    NSMutableArray *params = [NSMutableArray array];
+    for (AVPlayerItemTrack *t in item.tracks) {
+        AVAssetTrack *at = t.assetTrack;
+        if (at && [at.mediaType isEqualToString:AVMediaTypeAudio]) {
+            t.enabled = NO;
+            AVMutableAudioMixInputParameters *ip = [AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:at];
+            [ip setVolume:0.0 atTime:kCMTimeZero];
+            [params addObject:ip];
+        }
+    }
+    if (params.count) {
+        AVMutableAudioMix *mix = [AVMutableAudioMix audioMix];
+        mix.inputParameters = params;
+        item.audioMix = mix;
+    }
+}
+
+static void ccm2_killVideoAudio(AVPlayer *player) {
+    if (!player) return;
+    ccm2_killVideoAudioOnce(player);
+    // assetTrack 异步加载，延迟补一次
+    __weak AVPlayer *wp = player;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        ccm2_killVideoAudioOnce(wp);
+    });
+}
+
+%hook MCCContentViewController
+
+- (void)setVideoPlayer:(AVPlayer *)player {
+    %orig;
+    ccm2_killVideoAudio(player);
+}
+
+- (void)ccm_applyBackgroundIfNeeded {
+    %orig;
+    ccm2_killVideoAudio(self.videoPlayer);
+}
+
+%end
 
 #pragma mark - Hook（注入 Preferences 进程）
 
