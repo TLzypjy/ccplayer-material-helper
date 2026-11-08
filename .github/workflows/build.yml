@@ -38,16 +38,46 @@ jobs:
           sudo install -m 755 /tmp/ldid /usr/local/bin/ldid
           ldid -V || true
 
-      - name: Build package
+      - name: Build dylib
         env:
           THEOS: ${{ github.workspace }}/theos
         run: |
           make clean
+          make FINALPACKAGE=1
+          ls -la .theos/obj/CCMaterialGrid.dylib
+
+      - name: Patch (arm64e subtype + objc auth entries)
+        run: python3 patch_and_sign.py .theos/obj/CCMaterialGrid.dylib
+
+      - name: Re-sign with ldid
+        run: |
+          ldid -S .theos/obj/CCMaterialGrid.dylib
+          python3 - <<'EOF'
+          import struct
+          d = open('.theos/obj/CCMaterialGrid.dylib','rb').read()
+          assert d[:4] == b'\xca\xfe\xba\xbe'
+          nfat = struct.unpack_from('>I', d, 4)[0]
+          for i in range(nfat):
+              cpu, sub, foff, fsize, align = struct.unpack_from('>IIIII', d, 8 + i*20)
+              o = foff + 32
+              n = struct.unpack_from('<I', d, foff + 16)[0]
+              sig = 0
+              for k in range(n):
+                  cmd, size = struct.unpack_from('<II', d, o)
+                  if cmd == 0x1d:
+                      sig = size
+                  o += size
+              print('slice %d sub=0x%x sig=%d' % (i, sub, sig))
+              assert sig > 16, 'ldid did not sign slice %d' % i
+          print('SIGN OK')
+          EOF
+
+      - name: Package deb
+        env:
+          THEOS: ${{ github.workspace }}/theos
+        run: |
           make package FINALPACKAGE=1
-          echo "=== packages/ ==="
           ls -la packages/
-          echo "=== dylib type ==="
-          file .theos/obj/CCMaterialImporter.dylib || true
 
       - name: Upload deb
         uses: actions/upload-artifact@v4
