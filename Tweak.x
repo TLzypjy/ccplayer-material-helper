@@ -636,7 +636,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
                     pending--;
                     if (pending == 0) [self ccm_notifyHost];
                 }
-            }]);
+            }];
         }
     }];
 }
