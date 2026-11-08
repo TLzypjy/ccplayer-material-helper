@@ -801,7 +801,17 @@ static void ccm2_killVideoAudio(AVPlayer *player) {
         imp = [[UIBarButtonItem alloc] initWithTitle:@"导入" style:UIBarButtonItemStylePlain target:self action:sel];
         objc_setAssociatedObject(self, kCCMKeyImportBtn, imp, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    NSArray *items = self.navigationItem.rightBarButtonItems;
+    // 移除旧导入器（CCMaterialImporter.dylib）残留的「导入」按铮，避免重复
+    NSMutableArray *items = [self.navigationItem.rightBarButtonItems mutableCopy];
+    if (items) {
+        NSMutableArray *keep = [NSMutableArray array];
+        for (UIBarButtonItem *it in items) {
+            if (it.action && [NSStringFromSelector(it.action) isEqualToString:@"ccm_importTapped"]) continue;
+            [keep addObject:it];
+        }
+        if (keep.count != items.count) self.navigationItem.rightBarButtonItems = keep;
+        items = keep;
+    }
     if (![items containsObject:imp]) {
         NSMutableArray *arr = items.count ? [items mutableCopy] : [NSMutableArray array];
         [arr addObject:imp];
