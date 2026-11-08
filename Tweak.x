@@ -591,7 +591,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         ex.outputURL = [NSURL fileURLWithPath:dstPath];
         ex.outputFileType = ft;
         [ex exportAsynchronouslyWithCompletionHandler:^{
-            if (ex.status != AVAssetExportStatusCompleted) {
+            if (ex.status != AVAssetExportSessionStatusCompleted) {
                 [[NSFileManager defaultManager] removeItemAtPath:dstPath error:nil];
                 [[NSFileManager defaultManager] copyItemAtURL:src toURL:[NSURL fileURLWithPath:dstPath] error:nil];
             }
@@ -636,7 +636,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
                     pending--;
                     if (pending == 0) [self ccm_notifyHost];
                 }
-            });
+            }]);
         }
     }];
 }
