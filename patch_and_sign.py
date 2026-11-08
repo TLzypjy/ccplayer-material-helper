@@ -72,5 +72,26 @@ for idx in range(nfat):
 
 print('auth entries patched:', patched)
 assert patched == 12, 'expected 12 auth entries'
+
+# strip the fake 16-byte LC_CODE_SIGNATURE stub (must be the last load command)
+# so ldid treats the binary as unsigned and adds a real signature
+for idx in range(nfat):
+    cpu, sub, foff, fsize, align = struct.unpack_from('>IIIII', d, 8 + idx * 20)
+    ncmds = struct.unpack_from('<I', d, foff + 16)[0]
+    sizeofcmds = struct.unpack_from('<I', d, foff + 20)[0]
+    p = foff + 32
+    last_off = last_size = None
+    for k in range(ncmds):
+        cmd, size = struct.unpack_from('<II', d, p)
+        if cmd == 0x1d:
+            last_off, last_size = p, size
+        p += size
+    if last_off is not None and last_off + last_size == foff + 32 + sizeofcmds:
+        struct.pack_into('<I', d, foff + 16, ncmds - 1)
+        struct.pack_into('<I', d, foff + 20, sizeofcmds - last_size)
+        print('slice %d: stripped fake LC_CODE_SIGNATURE stub' % idx)
+    else:
+        print('slice %d: no trailing CS stub found (skip strip)' % idx)
+
 open(PATH, 'wb').write(bytes(d))
 print('patched file written:', PATH)
