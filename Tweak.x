@@ -98,7 +98,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 @property (nonatomic, strong) UIButton *nameButton;
 @property (nonatomic, strong) UIButton *deleteButton;
 @property (nonatomic, strong) UIImageView *checkView;
-@property (nonatomic, strong) UIImageView *videoBadge;
+@property (nonatomic, strong) UILabel *videoPill;
 @property (nonatomic, strong) NSString *currentPath;
 @property (nonatomic, copy) void (^onLongPress)(void);
 @property (nonatomic, copy) void (^onDelete)(void);
@@ -119,11 +119,10 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         [self.contentView addSubview:_thumbView];
 
         _nameButton = [UIButton buttonWithType:UIButtonTypeCustom];
-        _nameButton.titleLabel.font = [UIFont systemFontOfSize:10];
-        _nameButton.backgroundColor = [UIColor colorWithWhite:0.62 alpha:0.85];
-        _nameButton.layer.cornerRadius = 11;
+        _nameButton.titleLabel.font = [UIFont systemFontOfSize:12];
+        _nameButton.backgroundColor = [UIColor colorWithWhite:0.84 alpha:1.0];
+        _nameButton.layer.cornerRadius = 8;
         _nameButton.layer.masksToBounds = YES;
-        [_nameButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         _nameButton.titleLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
         _nameButton.titleLabel.numberOfLines = 1;
         [_nameButton setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
@@ -141,22 +140,21 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         [_deleteButton addTarget:self action:@selector(ccm_deleteTapped) forControlEvents:UIControlEventTouchUpInside];
         [_thumbView addSubview:_deleteButton];
 
-        _videoBadge = [[UIImageView alloc] initWithFrame:CGRectZero];
-        _videoBadge.image = [[UIImage systemImageNamed:@"play.circle.fill"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        _videoBadge.tintColor = [UIColor whiteColor];
-        _videoBadge.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
-        _videoBadge.layer.cornerRadius = 10;
-        _videoBadge.layer.masksToBounds = YES;
-        _videoBadge.contentMode = UIViewContentModeCenter;
-        _videoBadge.hidden = YES;
-        [_thumbView addSubview:_videoBadge];
+        _videoPill = [[UILabel alloc] initWithFrame:CGRectZero];
+        _videoPill.text = @"视频";
+        _videoPill.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
+        _videoPill.textColor = [UIColor whiteColor];
+        _videoPill.textAlignment = NSTextAlignmentCenter;
+        _videoPill.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
+        _videoPill.layer.cornerRadius = 9;
+        _videoPill.layer.masksToBounds = YES;
+        _videoPill.hidden = YES;
+        [_thumbView addSubview:_videoPill];
 
         _checkView = [[UIImageView alloc] initWithFrame:CGRectZero];
-        _checkView.backgroundColor = [UIColor systemBlueColor];
-        _checkView.layer.cornerRadius = 11;
+        _checkView.backgroundColor = [UIColor colorWithWhite:0.84 alpha:1.0];
+        _checkView.layer.cornerRadius = 10;
         _checkView.layer.masksToBounds = YES;
-        _checkView.layer.borderColor = [UIColor whiteColor].CGColor;
-        _checkView.layer.borderWidth = 1.5;
         _checkView.hidden = YES;
         [_checkView setImage:[[UIImage systemImageNamed:@"checkmark"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
         _checkView.tintColor = [UIColor whiteColor];
@@ -174,12 +172,12 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
     [super layoutSubviews];
     CGFloat w = self.contentView.bounds.size.width;
     CGFloat h = self.contentView.bounds.size.height;
-    CGFloat thumbH = h - 26;
+    CGFloat thumbH = h - 54;
     self.thumbView.frame = CGRectMake(0, 0, w, thumbH);
-    self.nameButton.frame = CGRectMake(6, thumbH + 2, w - 8, 22);
-    self.deleteButton.frame = CGRectMake(w - 24, 4, 20, 20);
-    self.videoBadge.frame = CGRectMake(6, thumbH - 26, 22, 22);
-    self.checkView.frame = CGRectMake(w - 26, thumbH - 34, 22, 22);
+    self.nameButton.frame = CGRectMake(0, thumbH + 4, w, 24);
+    self.checkView.frame = CGRectMake(w / 2 - 10, thumbH + 34, 20, 20);
+    self.deleteButton.frame = CGRectMake(w - 28, 4, 24, 24);
+    self.videoPill.frame = CGRectMake(8, 8, 40, 18);
 }
 
 - (void)ccm_longPressed:(UILongPressGestureRecognizer *)g {
@@ -231,9 +229,9 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
         UICollectionViewFlowLayout *fl = [[UICollectionViewFlowLayout alloc] init];
         fl.scrollDirection = UICollectionViewScrollDirectionVertical;
-        fl.minimumInteritemSpacing = 0;
-        fl.minimumLineSpacing = 14;
-        fl.sectionInset = UIEdgeInsetsMake(14, 16, 70, 16);
+        fl.minimumInteritemSpacing = 14;
+        fl.minimumLineSpacing = 18;
+        fl.sectionInset = UIEdgeInsetsMake(16, 16, 40, 16);
 
         _cv = [[UICollectionView alloc] initWithFrame:CGRectZero collectionViewLayout:fl];
         _cv.backgroundColor = [UIColor colorWithWhite:0.94 alpha:1.0];
@@ -439,8 +437,10 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
 
 - (CGSize)collectionView:(UICollectionView *)cv layout:(UICollectionViewLayout *)layout sizeForItemAtIndexPath:(NSIndexPath *)ip {
     CGFloat w = cv.bounds.size.width;
-    CGFloat side = (w - 32.0) / 3.0;
-    return CGSizeMake(side, side + 26);
+    if (w < 100) return CGSizeMake(100, 200);
+    CGFloat side = (w - 32.0 - 28.0) / 3.0;
+    CGFloat thumbH = side * 1.16;
+    return CGSizeMake(side, thumbH + 54);
 }
 
 - (UICollectionViewCell *)collectionView:(UICollectionView *)cv cellForItemAtIndexPath:(NSIndexPath *)ip {
@@ -454,18 +454,21 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         if ([v isKindOfClass:[UITextField class]] && v != self.activeField) [v removeFromSuperview];
     }
     cell.deleteButton.hidden = !self.editing;
-    cell.videoBadge.hidden = YES;
+    cell.videoPill.hidden = YES;
     NSString *low = file.pathExtension.lowercaseString;
-    if ([@[@"mp4", @"mov"] containsObject:low]) cell.videoBadge.hidden = NO;
+    if ([@[@"mp4", @"mov"] containsObject:low]) cell.videoPill.hidden = NO;
 
     NSString *selKey = ccm_isCompactPage(self.host) ? @"selectedCompactBackgroundFile" : @"selectedExpandedBackgroundFile";
     BOOL selected = [ccm_prefString(selKey) isEqualToString:file];
-    cell.checkView.hidden = self.editing ? YES : !selected;
+    cell.checkView.hidden = self.editing;
+    cell.checkView.backgroundColor = selected ? [UIColor systemBlueColor] : [UIColor colorWithWhite:0.84 alpha:1.0];
+    cell.checkView.image = selected ? [[UIImage systemImageNamed:@"checkmark"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] : nil;
 
     __weak typeof(self) ws = self;
     cell.onLongPress = ^{ [ws enterEditing]; };
     cell.onDelete = ^{ [ws ccm_deleteFile:ip]; };
-    cell.onRenameTap = ^{ [ws beginRename:ip]; };
+    cell.onRenameTap = nil;
+    if (self.editing) cell.onRenameTap = ^{ [ws beginRename:ip]; };
     [cell setJiggling:self.editing];
     [self ccm_loadThumb:path into:cell at:ip];
     return cell;
@@ -484,7 +487,7 @@ static void ccm_setPrefString(NSString *key, NSString *val) {
         self.footerLabel.numberOfLines = 0;
         self.footerLabel.font = [UIFont systemFontOfSize:12];
         self.footerLabel.textColor = [UIColor secondaryLabelColor];
-        self.footerLabel.text = @"将多个 mp4/mov/gif/png/jpg/jpeg 放到 /var/mobile/Media/CCMusicModuleBackgrounds。这里选择的素材只会作用到当前这个状态；如果这个状态还没单独选过，就会回退到默认背景选择。\n\n长按素材可删除，点名字可直接改名。";
+        self.footerLabel.text = @"将多个 mp4/mov/gif/png/jpg/jpeg 放到 /var/mobile/Media/CCMusicModuleBackgrounds。这里选择的素材只会作用到当前这个状态；如果这个状态还没单独选过，就会回退到默认背景选择。\n\n长按素材进入编辑模式：点红色 − 删除，点名字改名。";
         [v addSubview:self.footerLabel];
     }
     return v;
